@@ -17,17 +17,44 @@ function saveDB(data) {
   fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
 }
 
+/* ================= JOIN CHECK ================= */
+async function checkJoin(ctx) {
+  try {
+    const res = await bot.telegram.getChatMember(
+      "@Global_Method_Channel",
+      ctx.from.id
+    );
+    return ["creator", "administrator", "member"].includes(res.status);
+  } catch {
+    return false;
+  }
+}
+
+/* ================= JOIN MSG ================= */
+function joinMsg(ctx) {
+  return ctx.reply(
+    "❌ Please join first to continue",
+    Markup.inlineKeyboard([
+      [Markup.button.url("📢 Join Channel", "https://t.me/Global_Method_Channel")],
+      [Markup.button.callback("✅ I Joined", "check_join")]
+    ])
+  );
+}
+
 /* ================= STATES ================= */
 const depositState = {};
 
 /* ================= START ================= */
-bot.start((ctx) => {
+bot.start(async (ctx) => {
+  const ok = await checkJoin(ctx);
+  if (!ok) return joinMsg(ctx);
+
   ctx.reply(
-    "👋 Welcome!\n\nUse commands:\n/balance\n/deposit"
+    "👋 Welcome!\n\n💰 Use:\n/balance\n/deposit"
   );
 });
 
-/* ================= BALANCE COMMAND ================= */
+/* ================= BALANCE ================= */
 bot.command("balance", (ctx) => {
   const db = loadDB();
   const user = db.users[ctx.from.id] || { balance: 0 };
@@ -38,10 +65,10 @@ bot.command("balance", (ctx) => {
 💰 Balance: $${user.balance}`);
 });
 
-/* ================= DEPOSIT COMMAND ================= */
+/* ================= DEPOSIT ================= */
 bot.command("deposit", (ctx) => {
   ctx.reply(
-    "💰 Select Method:",
+    "💰 Select Payment Method:",
     Markup.inlineKeyboard([
       [Markup.button.callback("📱 BKash", "dep_bkash")],
       [Markup.button.callback("📱 Nagad", "dep_nagad")],
@@ -59,17 +86,19 @@ bot.action(/dep_(.+)/, (ctx) => {
     method
   };
 
-  let number = "";
-  if (method === "bkash") number = config.BKASH;
-  if (method === "nagad") number = config.NAGAD;
-  if (method === "binance") number = config.BINANCE_ID;
+  let number = "01890XXXXXX (Example)";
+  if (method === "binance") number = config.BINANCE_ID || "BINANCE_ID";
+  if (method === "nagad") number = config.NAGAD || "NAGAD_NUMBER";
 
   ctx.reply(
-    `💳 Send Money to:\n${number}\n\n💰 Now send amount:`
+`💳 Send Money to:
+${number}
+
+💰 Now enter amount:`
   );
 });
 
-/* ================= TEXT FLOW ================= */
+/* ================= FLOW ================= */
 bot.on("text", async (ctx) => {
   const db = loadDB();
   const id = ctx.from.id;
@@ -84,7 +113,7 @@ bot.on("text", async (ctx) => {
     state.step = "proof";
 
     return ctx.reply(
-      "📤 After payment click button below:",
+      "📤 After payment click below:",
       Markup.inlineKeyboard([
         [Markup.button.callback("✅ Payment Success", "pay_done")]
       ])
@@ -92,7 +121,7 @@ bot.on("text", async (ctx) => {
   }
 
   /* STEP 2: PROOF */
-  if (state.step === "proof_wait") {
+  if (state.step === "proof") {
     const depId = Date.now();
 
     db.deposits[depId] = {
@@ -103,6 +132,8 @@ bot.on("text", async (ctx) => {
       status: "pending"
     };
 
+    if (!db.users[id]) db.users[id] = { balance: 0 };
+
     saveDB(db);
     delete depositState[id];
 
@@ -112,7 +143,7 @@ bot.on("text", async (ctx) => {
 
 User: ${id}
 Method: ${state.method}
-Amount: $${state.amount}
+Amount: ${state.amount}
 Proof: ${ctx.message.text}`,
       Markup.inlineKeyboard([
         [
@@ -122,7 +153,9 @@ Proof: ${ctx.message.text}`,
       ])
     );
 
-    return ctx.reply("⏳ Deposit request sent, wait for approval.");
+    return ctx.reply(
+      "⏳ Your deposit request sent to admin. Please wait..."
+    );
   }
 });
 
@@ -132,13 +165,13 @@ bot.action("pay_done", (ctx) => {
 
   if (!depositState[id]) return;
 
-  depositState[id].step = "proof_wait";
+  depositState[id].step = "proof";
 
   ctx.reply("📤 Please send transaction ID or screenshot text:");
 });
 
 /* ================= APPROVE ================= */
-bot.action(/dep_appr_(.+)/, (ctx) => {
+bot.action(/dep_appr_(.+)/, async (ctx) => {
   if (ctx.from.id !== config.ADMIN_ID) return;
 
   const id = ctx.match[1];
@@ -149,21 +182,22 @@ bot.action(/dep_appr_(.+)/, (ctx) => {
 
   dep.status = "approved";
 
-  if (!db.users[dep.userId]) db.users[dep.userId] = { balance: 0 };
   db.users[dep.userId].balance += dep.amount;
 
   saveDB(db);
 
-  bot.telegram.sendMessage(
+  await bot.telegram.sendMessage(
     dep.userId,
-    `✅ Deposit Approved!\n💰 $${dep.amount} added to your balance`
+    `✅ Deposit Approved!
+
+💰 $${dep.amount} added to your balance`
   );
 
   ctx.reply("Approved");
 });
 
 /* ================= REJECT ================= */
-bot.action(/dep_rej_(.+)/, (ctx) => {
+bot.action(/dep_rej_(.+)/, async (ctx) => {
   if (ctx.from.id !== config.ADMIN_ID) return;
 
   const id = ctx.match[1];
@@ -175,7 +209,7 @@ bot.action(/dep_rej_(.+)/, (ctx) => {
   dep.status = "rejected";
   saveDB(db);
 
-  bot.telegram.sendMessage(
+  await bot.telegram.sendMessage(
     dep.userId,
     "❌ Deposit rejected"
   );
