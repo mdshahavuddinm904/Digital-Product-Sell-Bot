@@ -5,7 +5,7 @@ const config = require("./config");
 const bot = new Telegraf(config.BOT_TOKEN);
 const DB_FILE = "./db.json";
 
-/* DB */
+/* ================= DB ================= */
 function loadDB() {
   if (!fs.existsSync(DB_FILE)) {
     fs.writeFileSync(DB_FILE, JSON.stringify({ users: {}, orders: {} }, null, 2));
@@ -17,7 +17,7 @@ function saveDB(data) {
   fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
 }
 
-/* JOIN CHECK */
+/* ================= JOIN CHECK ================= */
 async function checkJoin(ctx) {
   try {
     const res = await bot.telegram.getChatMember(
@@ -30,7 +30,7 @@ async function checkJoin(ctx) {
   }
 }
 
-/* FORCE JOIN */
+/* ================= JOIN MESSAGE ================= */
 function joinMsg(ctx) {
   return ctx.reply(
     "❌ Please join first to continue",
@@ -41,7 +41,7 @@ function joinMsg(ctx) {
   );
 }
 
-/* PRODUCTS */
+/* ================= PRODUCTS ================= */
 const products = {
   nord: "Nord VPN",
   express: "Express VPN",
@@ -50,7 +50,11 @@ const products = {
   sharf: "Sharfshak VPN"
 };
 
-/* START */
+/* ================= STATES ================= */
+const orderState = {};
+const adminFlow = {};
+
+/* ================= START ================= */
 bot.start(async (ctx) => {
   const db = loadDB();
   const id = ctx.from.id;
@@ -58,7 +62,6 @@ bot.start(async (ctx) => {
   if (!db.users[id]) db.users[id] = { joined: false };
 
   const joined = await checkJoin(ctx);
-
   if (!joined) {
     saveDB(db);
     return joinMsg(ctx);
@@ -70,7 +73,7 @@ bot.start(async (ctx) => {
   return showProducts(ctx);
 });
 
-/* PRODUCT UI (2 per row) */
+/* ================= PRODUCT UI (2 per row) ================= */
 function showProducts(ctx) {
   const keys = Object.keys(products);
   const buttons = [];
@@ -87,10 +90,7 @@ function showProducts(ctx) {
   ctx.reply("🛒 Select Product:", Markup.inlineKeyboard(buttons));
 }
 
-/* ORDER TEMP */
-const orderState = {};
-
-/* BUY */
+/* ================= BUY ================= */
 bot.action(/buy_(.+)/, (ctx) => {
   const key = ctx.match[1];
   orderState[ctx.from.id] = key;
@@ -99,46 +99,80 @@ bot.action(/buy_(.+)/, (ctx) => {
 👉 ${products[key]}`);
 });
 
-/* RECEIVE ORDER */
+/* ================= RECEIVE ORDER ================= */
 bot.on("text", async (ctx) => {
   const db = loadDB();
   const id = ctx.from.id;
 
-  if (!orderState[id]) return;
+  /* USER ORDER */
+  if (orderState[id]) {
+    const key = orderState[id];
+    const orderId = Date.now();
 
-  const key = orderState[id];
-  const orderId = Date.now();
+    db.orders[orderId] = {
+      userId: id,
+      product: key,
+      proof: ctx.message.text,
+      status: "pending"
+    };
 
-  db.orders[orderId] = {
-    userId: id,
-    product: key,
-    proof: ctx.message.text,
-    status: "pending"
-  };
+    saveDB(db);
+    delete orderState[id];
 
-  saveDB(db);
-  delete orderState[id];
-
-  await bot.telegram.sendMessage(
-    config.ADMIN_ID,
-    `🛒 New Order
+    await bot.telegram.sendMessage(
+      config.ADMIN_ID,
+      `🛒 New Order
 
 ID: ${orderId}
 User: ${id}
 Product: ${products[key]}
 Proof: ${ctx.message.text}`,
-    Markup.inlineKeyboard([
-      [
-        Markup.button.callback("✅ Approve", `approve_${orderId}`),
-        Markup.button.callback("❌ Reject", `reject_${orderId}`)
-      ]
-    ])
-  );
+      Markup.inlineKeyboard([
+        [
+          Markup.button.callback("✅ Approve", `approve_${orderId}`),
+          Markup.button.callback("❌ Reject", `reject_${orderId}`)
+        ]
+      ])
+    );
 
-  ctx.reply("✅ Order sent to admin");
+    return ctx.reply("✅ Order sent to admin");
+  }
+
+  /* ADMIN DELIVERY FLOW */
+  const flow = adminFlow[ctx.from.id];
+  if (!flow) return;
+
+  if (flow.step === "gmail") {
+    flow.data.gmail = ctx.message.text;
+    flow.step = "password";
+    return ctx.reply("🔑 Send Password:");
+  }
+
+  if (flow.step === "password") {
+    flow.data.password = ctx.message.text;
+    flow.step = "login";
+    return ctx.reply("🔐 Send Login Info:");
+  }
+
+  if (flow.step === "login") {
+    flow.data.login = ctx.message.text;
+
+    await bot.telegram.sendMessage(
+      flow.userId,
+      `🎉 Product Delivered
+
+📧 Gmail: ${flow.data.gmail}
+🔑 Password: ${flow.data.password}
+🔐 Login: ${flow.data.login}`
+    );
+
+    delete adminFlow[ctx.from.id];
+
+    return ctx.reply("✅ Delivered Successfully");
+  }
 });
 
-/* APPROVE */
+/* ================= APPROVE ================= */
 bot.action(/approve_(.+)/, async (ctx) => {
   if (ctx.from.id !== config.ADMIN_ID) return;
 
@@ -151,19 +185,18 @@ bot.action(/approve_(.+)/, async (ctx) => {
   order.status = "approved";
   saveDB(db);
 
-  ctx.editMessageText("✅ Approved - send delivery message now");
+  adminFlow[ctx.from.id] = {
+    step: "gmail",
+    orderId,
+    userId: order.userId,
+    data: {}
+  };
 
-  bot.once("text", async (msgCtx) => {
-    await bot.telegram.sendMessage(
-      order.userId,
-      `🎉 Your Product Delivered:
-
-${msgCtx.message.text}`
-    );
-  });
+  ctx.reply("📧 Send Gmail:");
+  ctx.editMessageText("✅ Approved - waiting delivery");
 });
 
-/* REJECT */
+/* ================= REJECT ================= */
 bot.action(/reject_(.+)/, async (ctx) => {
   if (ctx.from.id !== config.ADMIN_ID) return;
 
@@ -176,15 +209,12 @@ bot.action(/reject_(.+)/, async (ctx) => {
   order.status = "rejected";
   saveDB(db);
 
-  await bot.telegram.sendMessage(
-    order.userId,
-    "❌ Your order was rejected"
-  );
+  await bot.telegram.sendMessage(order.userId, "❌ Your order was rejected");
 
   ctx.editMessageText("❌ Rejected");
 });
 
-/* JOIN BUTTON */
+/* ================= JOIN BUTTON ================= */
 bot.action("check_join", async (ctx) => {
   const ok = await checkJoin(ctx);
   if (!ok) return joinMsg(ctx);
@@ -192,5 +222,6 @@ bot.action("check_join", async (ctx) => {
   showProducts(ctx);
 });
 
+/* ================= LAUNCH ================= */
 bot.launch();
 console.log("🚀 Bot Running");
