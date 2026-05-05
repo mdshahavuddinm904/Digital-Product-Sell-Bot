@@ -13,122 +13,191 @@ function saveDB(data) {
   fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
 }
 
-/* PRODUCTS */
-const products = {
-  netflix: {
-    name: "Netflix Premium",
-    price: 5,
-    delivery: "📧 Email: demo@gmail.com\n🔑 Pass: 123456"
-  },
-  canva: {
-    name: "Canva Pro",
-    price: 3,
-    delivery: "🎁 Invite link: https://canva.com/xxxx"
+/* JOIN CHECK */
+async function checkJoin(ctx) {
+  try {
+    const res = await bot.telegram.getChatMember(
+      "@Global_Method_Channel",
+      ctx.from.id
+    );
+    return ["creator", "administrator", "member"].includes(res.status);
+  } catch {
+    return false;
   }
-};
+}
 
-/* START */
-bot.start((ctx) => {
-  ctx.reply(
-    "🛒 Welcome to Digital Shop",
+/* FORCE JOIN MSG */
+function joinMsg(ctx) {
+  return ctx.reply(
+    "❌ Join required first!",
     Markup.inlineKeyboard([
-      [Markup.button.callback("🛍 View Products", "products")]
+      [Markup.button.url("📢 Join Channel", "https://t.me/Global_Method_Channel")],
+      [Markup.button.callback("✅ I Joined", "check_join")]
     ])
   );
+}
+
+/* PRODUCTS */
+const products = {
+  nord: "Nord VPN",
+  express: "Express VPN",
+  hma: "HMA VPN",
+  abc: "ABC IP",
+  sharf: "Sharfshak VPN"
+};
+
+/* STATES */
+const orderState = {};
+const adminState = {};
+
+/* START */
+bot.start(async (ctx) => {
+  const db = loadDB();
+  const id = ctx.from.id;
+
+  if (!db.users[id]) {
+    db.users[id] = { joined: false };
+  }
+
+  const joined = await checkJoin(ctx);
+  if (!joined) {
+    saveDB(db);
+    return joinMsg(ctx);
+  }
+
+  db.users[id].joined = true;
+  saveDB(db);
+
+  showProducts(ctx);
 });
 
 /* SHOW PRODUCTS */
-bot.action("products", (ctx) => {
-  const buttons = Object.keys(products).map((key) => {
-    return [Markup.button.callback(products[key].name, `buy_${key}`)];
-  });
-
-  ctx.editMessageText("🛍 Select Product:", Markup.inlineKeyboard(buttons));
-});
-
-/* BUY */
-bot.action(/buy_(.+)/, (ctx) => {
-  const key = ctx.match[1];
-  const product = products[key];
+function showProducts(ctx) {
+  const buttons = Object.keys(products).map((k) => [
+    Markup.button.callback(products[k], `buy_${k}`)
+  ]);
 
   ctx.reply(
-    `🛒 ${product.name}
-
-💰 Price: $${product.price}
-
-💳 Send Payment to:
-${config.PAYMENT_NUMBER}
-
-📩 After payment, send TXID / Screenshot`
+    "🛒 Select Product:",
+    Markup.inlineKeyboard(buttons)
   );
+}
 
-  const db = loadDB();
-  db.users[ctx.from.id] = { buying: key };
-  saveDB(db);
+/* BUY */
+bot.action(/buy_(.+)/, async (ctx) => {
+  const key = ctx.match[1];
+
+  orderState[ctx.from.id] = key;
+
+  ctx.reply(
+    `💳 Send Payment Screenshot / TXID for:
+👉 ${products[key]}`
+  );
 });
 
-/* RECEIVE TXID */
+/* RECEIVE PAYMENT PROOF */
 bot.on("text", async (ctx) => {
   const db = loadDB();
-  const user = db.users[ctx.from.id];
+  const id = ctx.from.id;
 
-  if (user && user.buying) {
-    const orderId = Date.now();
+  if (!orderState[id]) return;
 
-    db.orders[orderId] = {
-      userId: ctx.from.id,
-      product: user.buying,
-      proof: ctx.message.text,
-      status: "pending"
-    };
+  const productKey = orderState[id];
+  const orderId = Date.now();
 
-    delete user.buying;
-    saveDB(db);
+  db.orders[orderId] = {
+    userId: id,
+    product: productKey,
+    proof: ctx.message.text,
+    status: "pending"
+  };
 
-    const product = products[db.orders[orderId].product];
+  saveDB(db);
+  delete orderState[id];
 
-    await bot.telegram.sendMessage(
-      config.ADMIN_ID,
-      `🛒 New Order
+  await bot.telegram.sendMessage(
+    config.ADMIN_ID,
+    `🛒 New Order
 
-ID: ${orderId}
-User: ${ctx.from.id}
-Product: ${product.name}
+User: ${id}
+Product: ${products[productKey]}
 Proof: ${ctx.message.text}`,
-      Markup.inlineKeyboard([
-        [Markup.button.callback("✅ Approve", `ok_${orderId}`)]
-      ])
-    );
+    Markup.inlineKeyboard([
+      [
+        Markup.button.callback("✅ Approve", `appr_${orderId}`),
+        Markup.button.callback("❌ Reject", `rej_${orderId}`)
+      ]
+    ])
+  );
 
-    ctx.reply("✅ Order submitted! Wait for approval.");
-  }
+  ctx.reply("✅ Payment sent to admin, wait for approval!");
 });
 
 /* APPROVE */
-bot.action(/ok_(.+)/, async (ctx) => {
+bot.action(/appr_(.+)/, async (ctx) => {
   if (ctx.from.id !== config.ADMIN_ID) return;
 
   const id = ctx.match[1];
   const db = loadDB();
   const order = db.orders[id];
 
-  if (!order || order.status !== "pending") return;
+  if (!order) return;
 
-  order.status = "done";
+  order.status = "approved";
   saveDB(db);
 
-  const product = products[order.product];
+  adminState[id] = order.userId;
+
+  await ctx.reply("✍️ Now send delivery message (email/password/key)");
+
+  ctx.editMessageText("✅ Approved - waiting delivery input");
+});
+
+/* ADMIN DELIVERY MESSAGE */
+bot.on("text", async (ctx) => {
+  const orderId = Object.keys(adminState)[0];
+  if (!orderId) return;
+
+  const userId = adminState[orderId];
+
+  await bot.telegram.sendMessage(
+    userId,
+    `🎉 Your Product Delivered:
+
+${ctx.message.text}`
+  );
+
+  delete adminState[orderId];
+});
+
+/* REJECT */
+bot.action(/rej_(.+)/, async (ctx) => {
+  if (ctx.from.id !== config.ADMIN_ID) return;
+
+  const id = ctx.match[1];
+  const db = loadDB();
+  const order = db.orders[id];
+
+  if (!order) return;
+
+  order.status = "rejected";
+  saveDB(db);
 
   await bot.telegram.sendMessage(
     order.userId,
-    `✅ Payment Confirmed!
-
-🎁 Your Product:
-${product.delivery}`
+    "❌ Your order was rejected!"
   );
 
-  ctx.editMessageText("✅ Delivered");
+  ctx.editMessageText("❌ Rejected");
+});
+
+/* JOIN CHECK BUTTON */
+bot.action("check_join", async (ctx) => {
+  const ok = await checkJoin(ctx);
+  if (!ok) return joinMsg(ctx);
+
+  showProducts(ctx);
 });
 
 bot.launch();
-console.log("🛒 Shop Bot Running...");
+console.log("🚀 Bot Running");
