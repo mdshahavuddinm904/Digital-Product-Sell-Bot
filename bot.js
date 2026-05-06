@@ -12,8 +12,8 @@ function loadDB() {
       users: {},
       prices: {},
       vpndata: {},
-      orders: {},
-      deposits: {}
+      deposits: {},
+      orders: {}
     }, null, 2));
   }
   return JSON.parse(fs.readFileSync(DB_FILE));
@@ -26,33 +26,30 @@ function saveDB(data) {
 async function isJoined(ctx) {
   try {
     const res = await bot.telegram.getChatMember("@Global_Method_Channel", ctx.from.id);
-    return ["member", "administrator", "creator"].includes(res.status);
+    return ["member","administrator","creator"].includes(res.status);
   } catch {
     return false;
   }
 }
 
-async function forceJoin(ctx) {
+async function forceJoin(ctx){
   const ok = await isJoined(ctx);
-  if (!ok) {
+  if(!ok){
     await ctx.reply(
 `🚫 Access Denied!
 
-📢 Bot ব্যবহার করতে হলে আগে চ্যানেলে জয়েন করুন
-
-👇 নিচের বাটনে ক্লিক করুন`,
-      Markup.inlineKeyboard([
-        [Markup.button.url("📢 Join Channel", "https://t.me/Global_Method_Channel")],
-        [Markup.button.callback("✅ Joined", "check_join")]
-      ])
+📢 Bot ব্যবহার করতে হলে আগে চ্যানেলে জয়েন করুন`,
+Markup.inlineKeyboard([
+[Markup.button.url("📢 Join Channel","https://t.me/Global_Method_Channel")],
+[Markup.button.callback("✅ Joined","check_join")]
+])
     );
     return false;
   }
   return true;
 }
 
-/* ================= DATA ================= */
-const vpns = ["nord","express","hma","sharf"];
+/* ================= STATES ================= */
 const userSelect = {};
 const depositState = {};
 const setPriceState = {};
@@ -60,7 +57,7 @@ const vpnState = {};
 const rejectState = {};
 
 /* ================= START ================= */
-bot.start(async (ctx) => {
+bot.start(async (ctx)=>{
   if (!(await forceJoin(ctx))) return;
   showVPN(ctx);
 });
@@ -68,7 +65,7 @@ bot.start(async (ctx) => {
 /* ================= VPN UI ================= */
 function showVPN(ctx){
   ctx.reply(
-"🌐 Please Select Your VPN:",
+"🌐 Select VPN:",
 Markup.inlineKeyboard([
 [
 Markup.button.callback("Nord VPN","vpn_nord"),
@@ -82,14 +79,14 @@ Markup.button.callback("Sharf VPN","vpn_sharf")
 );
 }
 
-/* ================= VPN SELECT ================= */
+/* ================= SELECT VPN ================= */
 bot.action(/vpn_(.+)/, async (ctx)=>{
   if (!(await forceJoin(ctx))) return;
 
   const vpn = ctx.match[1];
   userSelect[ctx.from.id] = { vpn };
 
-  ctx.reply("📅 Select Duration:",
+  ctx.reply("📅 Select Duration",
 Markup.inlineKeyboard([
 [
 Markup.button.callback("7 Day","day_7"),
@@ -99,11 +96,12 @@ Markup.button.callback("30 Day","day_30")
 );
 });
 
-/* ================= DAY ================= */
+/* ================= SELECT DAY ================= */
 bot.action(/day_(.+)/, async (ctx)=>{
   const db = loadDB();
   const day = ctx.match[1];
   const u = userSelect[ctx.from.id];
+
   if (!u) return;
 
   u.day = day;
@@ -137,7 +135,7 @@ bot.command("balance", async (ctx)=>{
   );
 });
 
-/* ================= MAIN BUY ================= */
+/* ================= MAIN BALANCE ================= */
 bot.action("pay_balance", async (ctx)=>{
   const db = loadDB();
   const id = ctx.from.id;
@@ -169,14 +167,13 @@ VPN: ${u.vpn}
     );
   }
 
-  /* admin request */
   const oid = Date.now();
   db.orders[oid] = { userId:id, vpn:u.vpn, day:u.day };
   saveDB(db);
 
   bot.telegram.sendMessage(
     config.ADMIN_ID,
-`🛒 Order Request
+`🛒 Order
 
 User: ${id}
 VPN: ${u.vpn}
@@ -193,7 +190,7 @@ Markup.button.callback("❌ Reject",`rej_${oid}`)
 });
 
 /* ================= MANUAL ================= */
-bot.action("pay_manual", async (ctx)=>{
+bot.action("pay_manual",(ctx)=>{
   ctx.reply(
 "💳 Select Method",
 Markup.inlineKeyboard([
@@ -210,9 +207,9 @@ Markup.button.callback("Binance","m_binance")
 
 bot.action(/m_(.+)/,(ctx)=>{
   let msg="";
-  if (ctx.match[1]==="bkash") msg="📱 01890XXXXXX";
-  if (ctx.match[1]==="nagad") msg="📱 01911XXXXXX";
-  if (ctx.match[1]==="binance") msg="💰 ID: 985568941";
+  if (ctx.match[1]==="bkash") msg="📱 BKash: 01890XXXXXX";
+  if (ctx.match[1]==="nagad") msg="📱 Nagad: 01911XXXXXX";
+  if (ctx.match[1]==="binance") msg="💰 Binance ID: 985568941";
 
   ctx.reply(`💳 Send Payment:\n${msg}\n\nSend Proof after payment`);
 });
@@ -222,7 +219,7 @@ bot.command("deposit", async (ctx)=>{
   if (!(await forceJoin(ctx))) return;
 
   ctx.reply(
-"💰 Deposit Method",
+"💰 Select Deposit Method",
 Markup.inlineKeyboard([
 [
 Markup.button.callback("BKash","d_bkash"),
@@ -236,13 +233,26 @@ Markup.button.callback("Binance","d_binance")
 });
 
 bot.action(/d_(.+)/,(ctx)=>{
-  depositState[ctx.from.id]={method:ctx.match[1],step:"amount"};
+  const method = ctx.match[1];
 
-  ctx.reply("Enter Amount:");
+  let number="";
+  if(method==="bkash") number="📱 BKash: 01890XXXXXX";
+  if(method==="nagad") number="📱 Nagad: 01911XXXXXX";
+  if(method==="binance") number="💰 Binance ID: 985568941";
+
+  depositState[ctx.from.id]={method,step:"amount"};
+
+  ctx.reply(
+`💳 Method: ${method.toUpperCase()}
+
+${number}
+
+💰 Enter Amount`
+  );
 });
 
 /* ================= ADMIN ================= */
-bot.command("setprice", (ctx)=>{
+bot.command("setprice",(ctx)=>{
   if (ctx.from.id !== config.ADMIN_ID) return;
 
   ctx.reply("Select VPN",
@@ -294,7 +304,7 @@ bot.action(/svd_(.+)/,(ctx)=>{
 });
 
 /* ================= TEXT ================= */
-bot.on("text",(ctx)=>{
+bot.on("text", async (ctx)=>{
   const db = loadDB();
   const id = ctx.from.id;
 
@@ -312,7 +322,7 @@ bot.on("text",(ctx)=>{
   if (vpnState[id]){
     const v=vpnState[id];
 
-    if (v.step==="gmail"){ v.gmail=ctx.message.text; v.step="pass"; return ctx.reply("Send Pass"); }
+    if (v.step==="gmail"){ v.gmail=ctx.message.text; v.step="pass"; return ctx.reply("Send Password"); }
     if (v.step==="pass"){ v.pass=ctx.message.text; v.step="key"; return ctx.reply("Send Key"); }
 
     if (v.step==="key"){
@@ -331,45 +341,102 @@ bot.on("text",(ctx)=>{
     if (d.step==="amount"){
       d.amount=Number(ctx.message.text);
       d.step="proof";
-      return ctx.reply("Send Payment Proof");
+      return ctx.reply("📤 Send Payment Proof");
     }
 
     if (d.step==="proof"){
       const did=Date.now();
-      db.deposits[did]={userId:id,amount:d.amount,method:d.method,proof:ctx.message.text};
+
+      db.deposits[did]={
+        userId:id,
+        amount:d.amount,
+        method:d.method,
+        proof:ctx.message.text,
+        status:"pending"
+      };
+
       saveDB(db);
       delete depositState[id];
 
-      bot.telegram.sendMessage(
+      await bot.telegram.sendMessage(
         config.ADMIN_ID,
-`💰 Deposit
+`💰 New Deposit
 
 User: ${id}
-Amount: ${d.amount}`,
+Amount: ${d.amount}
+Method: ${d.method}
+Proof: ${ctx.message.text}`,
 Markup.inlineKeyboard([
 [
-Markup.button.callback("✅ Approve",`dap_${did}`),
-Markup.button.callback("❌ Reject",`drej_${did}`)
+Markup.button.callback("✅ Approve",`dep_appr_${did}`),
+Markup.button.callback("❌ Reject",`dep_rej_${did}`)
 ]
 ])
       );
 
-      return ctx.reply("⏳ Sent to admin");
+      return ctx.reply("⏳ Request sent to admin");
     }
+  }
+
+  /* reject reason */
+  if (rejectState[id]){
+    const data = rejectState[id];
+
+    await bot.telegram.sendMessage(
+      data.userId,
+`❌ Deposit Rejected
+
+Reason: ${ctx.message.text}`
+    );
+
+    delete rejectState[id];
+    return ctx.reply("Rejected with reason sent");
   }
 });
 
-/* ================= ADMIN APPROVE ================= */
-bot.action(/dap_(.+)/,(ctx)=>{
-  const db=loadDB();
-  const dep=db.deposits[ctx.match[1]];
+/* ================= APPROVE ================= */
+bot.action(/dep_appr_(.+)/, async (ctx)=>{
+  if (ctx.from.id !== config.ADMIN_ID) return;
+
+  const id = ctx.match[1];
+  const db = loadDB();
+  const dep = db.deposits[id];
+
   if (!dep) return;
 
+  dep.status="approved";
+
   if (!db.users[dep.userId]) db.users[dep.userId]={balance:0};
-  db.users[dep.userId].balance+=dep.amount;
+  db.users[dep.userId].balance += dep.amount;
+
   saveDB(db);
 
-  bot.telegram.sendMessage(dep.userId,"✅ Balance Added");
+  await bot.telegram.sendMessage(
+    dep.userId,
+`✅ Deposit Approved
+
+💰 ${dep.amount} added`
+  );
+
+  ctx.reply("Approved");
+});
+
+/* ================= REJECT ================= */
+bot.action(/dep_rej_(.+)/,(ctx)=>{
+  if (ctx.from.id !== config.ADMIN_ID) return;
+
+  const id = ctx.match[1];
+  const db = loadDB();
+  const dep = db.deposits[id];
+
+  if (!dep) return;
+
+  rejectState[ctx.from.id]={
+    depId:id,
+    userId:dep.userId
+  };
+
+  ctx.reply("❌ Write reject reason:");
 });
 
 /* ================= JOIN BTN ================= */
