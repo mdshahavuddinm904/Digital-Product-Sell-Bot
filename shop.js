@@ -19,25 +19,23 @@ function saveDB(data) {
 
 /* ================= STATES ================= */
 const depositState = {};
-const rejectReasonState = {};
+const adminFlow = {};
+const rejectState = {};
 
 /* ================= JOIN CHECK ================= */
 async function checkJoin(ctx) {
   try {
-    const res = await bot.telegram.getChatMember(
-      "@Global_Method_Channel",
-      ctx.from.id
-    );
+    const res = await bot.telegram.getChatMember("@Global_Method_Channel", ctx.from.id);
     return ["creator", "administrator", "member"].includes(res.status);
   } catch {
     return false;
   }
 }
 
-/* ================= JOIN MESSAGE ================= */
+/* ================= JOIN MSG ================= */
 function joinMsg(ctx) {
   return ctx.reply(
-    "❌ Join first to continue",
+    "❌ Please join channel first",
     Markup.inlineKeyboard([
       [Markup.button.url("📢 Join Channel", "https://t.me/Global_Method_Channel")],
       [Markup.button.callback("✅ Joined", "check_join")]
@@ -45,21 +43,37 @@ function joinMsg(ctx) {
   );
 }
 
+/* ================= MIDDLEWARE ================= */
+async function mustJoin(ctx, next) {
+  const ok = await checkJoin(ctx);
+  if (!ok) return joinMsg(ctx);
+  return next();
+}
+
 /* ================= START ================= */
 bot.start(async (ctx) => {
   const ok = await checkJoin(ctx);
   if (!ok) return joinMsg(ctx);
 
-  ctx.reply(
-`👋 Welcome to Bot
+  ctx.reply(`👋 Welcome!
 
 💰 Deposit System Active
-📊 Use /balance`
-  );
+📊 Use /balance`);
+});
+
+/* ================= BALANCE ================= */
+bot.command("balance", mustJoin, (ctx) => {
+  const db = loadDB();
+  const user = db.users[ctx.from.id] || { balance: 0 };
+
+  ctx.reply(`📊 Account Info
+
+🆔 ID: ${ctx.from.id}
+💰 Balance: $${user.balance}`);
 });
 
 /* ================= DEPOSIT ================= */
-bot.command("deposit", (ctx) => {
+bot.command("deposit", mustJoin, (ctx) => {
   ctx.reply(
     "💰 Select Payment Method:",
     Markup.inlineKeyboard([
@@ -70,8 +84,8 @@ bot.command("deposit", (ctx) => {
   );
 });
 
-/* ================= METHOD CLICK ================= */
-bot.action(/dep_(.+)/, (ctx) => {
+/* ================= METHOD ================= */
+bot.action(/dep_(.+)/, mustJoin, (ctx) => {
   const method = ctx.match[1];
 
   let number = "";
@@ -81,16 +95,11 @@ bot.action(/dep_(.+)/, (ctx) => {
 
   depositState[ctx.from.id] = {
     step: "amount",
-    method
+    method,
+    number
   };
 
-  ctx.reply(
-`💳 Method Selected: ${method.toUpperCase()}
-
-${number}
-
-💰 Now send amount:`
-  );
+  ctx.reply(`💰 Enter amount:`);
 });
 
 /* ================= TEXT FLOW ================= */
@@ -98,31 +107,31 @@ bot.on("text", async (ctx) => {
   const db = loadDB();
   const id = ctx.from.id;
 
-  /* ================= DEPOSIT FLOW ================= */
+  /* ================= DEPOSIT ================= */
   if (depositState[id]) {
     const state = depositState[id];
 
-    /* AMOUNT */
     if (state.step === "amount") {
       state.amount = Number(ctx.message.text);
-      state.step = "proof";
+      state.step = "wait_click";
 
       return ctx.reply(
-        "📤 Payment done?",
+`${state.number}
+
+💰 After payment click button below`,
         Markup.inlineKeyboard([
           [Markup.button.callback("✅ Payment Success", "pay_success")]
         ])
       );
     }
 
-    /* PROOF */
     if (state.step === "proof") {
       const depId = Date.now();
 
       db.deposits[depId] = {
         userId: id,
-        method: state.method,
         amount: state.amount,
+        method: state.method,
         proof: ctx.message.text,
         status: "pending"
       };
@@ -132,32 +141,67 @@ bot.on("text", async (ctx) => {
 
       await bot.telegram.sendMessage(
         config.ADMIN_ID,
-`💰 NEW DEPOSIT
+`💰 Deposit Request
 
 User: ${id}
+Amount: $${state.amount}
 Method: ${state.method}
-Amount: ${state.amount}
 Proof: ${ctx.message.text}`,
         Markup.inlineKeyboard([
           [
-            Markup.button.callback("🟢 Approve", `dep_appr_${depId}`),
-            Markup.button.callback("🔴 Reject", `dep_rej_${depId}`)
+            Markup.button.callback("✅ Approve", `ap_${depId}`),
+            Markup.button.callback("❌ Reject", `rej_${depId}`)
           ]
         ])
       );
 
       return ctx.reply(
-`⏳ Request sent to admin
+`⏳ Your request sent to admin
 
-🟢 Support: @Smart_Method_Owner`
+🟢 Support`,
+        Markup.inlineKeyboard([
+          [Markup.button.url("🟢 Support ID", "https://t.me/Smart_Method_Owner")]
+        ])
       );
     }
   }
 
+  /* ================= ADMIN APPROVE FLOW ================= */
+  if (adminFlow[id]) {
+    const f = adminFlow[id];
+
+    if (f.step === "gmail") {
+      f.gmail = ctx.message.text;
+      f.step = "pass";
+      return ctx.reply("🔑 Send Password:");
+    }
+
+    if (f.step === "pass") {
+      f.pass = ctx.message.text;
+      f.step = "login";
+      return ctx.reply("🔐 Send Login Key:");
+    }
+
+    if (f.step === "login") {
+      f.login = ctx.message.text;
+
+      await bot.telegram.sendMessage(
+        f.userId,
+`🎉 Product Delivered
+
+📧 Gmail: ${f.gmail}
+🔑 Password: ${f.pass}
+🔐 Login: ${f.login}`
+      );
+
+      delete adminFlow[id];
+      return ctx.reply("✅ Delivered");
+    }
+  }
+
   /* ================= REJECT REASON ================= */
-  if (rejectReasonState[id]) {
-    const depId = rejectReasonState[id].depId;
-    const userId = rejectReasonState[id].userId;
+  if (rejectState[id]) {
+    const userId = rejectState[id];
 
     await bot.telegram.sendMessage(
       userId,
@@ -166,8 +210,8 @@ Proof: ${ctx.message.text}`,
 Reason: ${ctx.message.text}`
     );
 
-    delete rejectReasonState[id];
-    return ctx.reply("Sent reason to user");
+    delete rejectState[id];
+    return ctx.reply("Rejected with reason");
   }
 });
 
@@ -175,11 +219,11 @@ Reason: ${ctx.message.text}`
 bot.action("pay_success", (ctx) => {
   depositState[ctx.from.id].step = "proof";
 
-  ctx.reply("📤 Please send transaction ID / screenshot text:");
+  ctx.reply("📤 Send transaction ID / proof:");
 });
 
 /* ================= APPROVE ================= */
-bot.action(/dep_appr_(.+)/, async (ctx) => {
+bot.action(/ap_(.+)/, (ctx) => {
   if (ctx.from.id !== config.ADMIN_ID) return;
 
   const id = ctx.match[1];
@@ -195,18 +239,16 @@ bot.action(/dep_appr_(.+)/, async (ctx) => {
 
   saveDB(db);
 
-  await bot.telegram.sendMessage(
-    dep.userId,
-`✅ Deposit Approved
+  adminFlow[ctx.from.id] = {
+    step: "gmail",
+    userId: dep.userId
+  };
 
-💰 $${dep.amount} added to your balance`
-  );
-
-  ctx.reply("Approved");
+  ctx.reply("📧 Send Gmail:");
 });
 
 /* ================= REJECT ================= */
-bot.action(/dep_rej_(.+)/, (ctx) => {
+bot.action(/rej_(.+)/, (ctx) => {
   if (ctx.from.id !== config.ADMIN_ID) return;
 
   const id = ctx.match[1];
@@ -215,12 +257,9 @@ bot.action(/dep_rej_(.+)/, (ctx) => {
 
   if (!dep) return;
 
-  rejectReasonState[ctx.from.id] = {
-    depId: id,
-    userId: dep.userId
-  };
+  rejectState[ctx.from.id] = dep.userId;
 
-  ctx.reply("❌ লিখুন কেন reject করবেন:");
+  ctx.reply("❌ Write reason:");
 });
 
 /* ================= JOIN BUTTON ================= */
@@ -228,12 +267,7 @@ bot.action("check_join", async (ctx) => {
   const ok = await checkJoin(ctx);
   if (!ok) return joinMsg(ctx);
 
-  ctx.reply(
-`✅ Welcome Back!
-
-💰 Deposit Ready
-📊 /balance`
-  );
+  ctx.reply("✅ Welcome!");
 });
 
 bot.launch();
