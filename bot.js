@@ -12,7 +12,8 @@ function loadDB() {
       users: {},
       prices: {},
       vpndata: {},
-      deposits: {}
+      deposits: {},
+      orders: {}
     }, null, 2));
   }
   return JSON.parse(fs.readFileSync(DB_FILE));
@@ -32,11 +33,12 @@ async function isJoined(ctx) {
 }
 
 async function forceJoin(ctx){
-  if (!(await isJoined(ctx))){
+  const ok = await isJoined(ctx);
+  if(!ok){
     await ctx.reply(
 `🚫 Access Denied!
 
-📢 Bot ব্যবহার করতে হলে আগে চ্যানেলে জয়েন করুন 👇`,
+📢 আগে চ্যানেলে জয়েন করুন`,
 Markup.inlineKeyboard([
 [Markup.button.url("📢 Join Channel","https://t.me/Global_Method_Channel")],
 [Markup.button.callback("✅ Joined","check_join")]
@@ -47,7 +49,7 @@ Markup.inlineKeyboard([
   return true;
 }
 
-/* ================= STATES ================= */
+/* ================= STATE ================= */
 const userSelect = {};
 const depositState = {};
 const setPriceState = {};
@@ -57,13 +59,13 @@ const rejectState = {};
 /* ================= START ================= */
 bot.start(async (ctx)=>{
   if (!(await forceJoin(ctx))) return;
-  return showVPN(ctx);
+  showVPN(ctx);
 });
 
 /* ================= VPN UI ================= */
 function showVPN(ctx){
   ctx.reply(
-"🌐 Select VPN:",
+"🌐 VPN Select করুন:",
 Markup.inlineKeyboard([
 [
 Markup.button.callback("Nord VPN","vpn_nord"),
@@ -77,13 +79,13 @@ Markup.button.callback("Sharf VPN","vpn_sharf")
 );
 }
 
-/* ================= SELECT VPN ================= */
+/* ================= VPN SELECT ================= */
 bot.action(/vpn_(.+)/, async (ctx)=>{
   if (!(await forceJoin(ctx))) return;
 
   userSelect[ctx.from.id] = { vpn: ctx.match[1] };
 
-  ctx.reply("📅 Select Duration:",
+  ctx.reply("📅 মেয়াদ সিলেক্ট করুন:",
 Markup.inlineKeyboard([
 [
 Markup.button.callback("7 Day","day_7"),
@@ -94,21 +96,22 @@ Markup.button.callback("30 Day","day_30")
 });
 
 /* ================= DAY ================= */
-bot.action(/day_(.+)/, (ctx)=>{
+bot.action(/day_(.+)/, async (ctx)=>{
   const db = loadDB();
   const u = userSelect[ctx.from.id];
   if (!u) return;
 
   u.day = ctx.match[1];
+
   const price = db.prices[u.vpn]?.[u.day] || "Not Set";
 
   ctx.reply(
 `💰 Price: ${price}
 
-💳 Choose Payment`,
+💳 Payment Method নির্বাচন করুন`,
 Markup.inlineKeyboard([
 [
-Markup.button.callback("💰 Balance","pay_balance"),
+Markup.button.callback("💰 Main Balance","pay_balance"),
 Markup.button.callback("💳 Manual","pay_manual")
 ]
 ])
@@ -125,7 +128,7 @@ bot.command("balance", async (ctx)=>{
   ctx.reply(`💰 Balance: ${u.balance}`);
 });
 
-/* ================= BUY WITH BALANCE ================= */
+/* ================= MAIN BUY ================= */
 bot.action("pay_balance", async (ctx)=>{
   const db = loadDB();
   const id = ctx.from.id;
@@ -133,38 +136,56 @@ bot.action("pay_balance", async (ctx)=>{
   if (!u) return;
 
   const price = db.prices[u.vpn]?.[u.day];
-  if (!price) return ctx.reply("❌ Price not set");
+  if (!price) return ctx.reply("❌ Price set নাই");
 
-  if (!db.users[id]) db.users[id] = { balance: 0 };
+  if (!db.users[id]) db.users[id]={balance:0};
 
   if (db.users[id].balance < price){
-    return ctx.reply("❌ Not enough balance");
+    return ctx.reply("❌ Balance নাই");
   }
 
   db.users[id].balance -= price;
+  saveDB(db);
 
   const data = db.vpndata[u.vpn]?.[u.day];
 
   if (data){
-    saveDB(db);
     return ctx.reply(
 `🎉 Order Delivered
 
 VPN: ${u.vpn}
-📧 Gmail: ${data.gmail}
-🔑 Pass: ${data.pass}
-🔐 Key: ${data.key}`
+📧 ${data.gmail}
+🔑 ${data.pass}
+🔐 ${data.key}`
     );
   }
 
+  const oid = Date.now();
+  db.orders[oid] = { userId:id, vpn:u.vpn, day:u.day };
   saveDB(db);
-  ctx.reply("❌ VPN not set by admin");
+
+  await bot.telegram.sendMessage(
+    config.ADMIN_ID,
+`🛒 Order
+
+User: ${id}
+VPN: ${u.vpn}
+Day: ${u.day}`,
+Markup.inlineKeyboard([
+[
+Markup.button.callback("✅ Approve",`appr_${oid}`),
+Markup.button.callback("❌ Reject",`rej_${oid}`)
+]
+])
+  );
+
+  ctx.reply("⏳ Admin এর কাছে পাঠানো হয়েছে");
 });
 
 /* ================= MANUAL ================= */
 bot.action("pay_manual",(ctx)=>{
   ctx.reply(
-"💳 Select Method",
+"💳 Method সিলেক্ট করুন",
 Markup.inlineKeyboard([
 [
 Markup.button.callback("BKash","m_bkash"),
@@ -179,11 +200,11 @@ Markup.button.callback("Binance","m_binance")
 
 bot.action(/m_(.+)/,(ctx)=>{
   let msg="";
-  if (ctx.match[1]==="bkash") msg="📱 01890XXXXXX";
-  if (ctx.match[1]==="nagad") msg="📱 01911XXXXXX";
-  if (ctx.match[1]==="binance") msg="💰 985568941";
+  if (ctx.match[1]==="bkash") msg="📱 BKash: 01890XXXXXX";
+  if (ctx.match[1]==="nagad") msg="📱 Nagad: 01911XXXXXX";
+  if (ctx.match[1]==="binance") msg="💰 Binance: 985568941";
 
-  ctx.reply(`Send Payment:\n${msg}\n\nThen send proof`);
+  ctx.reply(`💳 Payment করুন:\n${msg}\n\n📤 Payment proof পাঠান`);
 });
 
 /* ================= DEPOSIT ================= */
@@ -191,7 +212,7 @@ bot.command("deposit", async (ctx)=>{
   if (!(await forceJoin(ctx))) return;
 
   ctx.reply(
-"💰 Select Method",
+"💰 Deposit Method",
 Markup.inlineKeyboard([
 [
 Markup.button.callback("BKash","d_bkash"),
@@ -205,112 +226,16 @@ Markup.button.callback("Binance","d_binance")
 });
 
 bot.action(/d_(.+)/,(ctx)=>{
+  const method = ctx.match[1];
+
   let number="";
-  if (ctx.match[1]==="bkash") number="01890XXXXXX";
-  if (ctx.match[1]==="nagad") number="01911XXXXXX";
-  if (ctx.match[1]==="binance") number="985568941";
+  if(method==="bkash") number="📱 01890XXXXXX";
+  if(method==="nagad") number="📱 01911XXXXXX";
+  if(method==="binance") number="💰 985568941";
 
-  depositState[ctx.from.id] = { step:"amount", method:ctx.match[1], number };
+  depositState[ctx.from.id]={method,step:"amount"};
 
-  ctx.reply(`💳 ${number}\n\nEnter Amount:`);
-});
-
-/* ================= TEXT ================= */
-bot.on("text", async (ctx)=>{
-  const db = loadDB();
-  const id = ctx.from.id;
-
-  /* SET PRICE ONLY */
-  if (setPriceState[id]){
-    const s = setPriceState[id];
-
-    if (!db.prices[s.vpn]) db.prices[s.vpn]={};
-    db.prices[s.vpn][s.day] = Number(ctx.message.text);
-
-    saveDB(db);
-    delete setPriceState[id];
-
-    return ctx.reply("✅ Price Set Done");
-  }
-
-  /* SET VPN ONLY */
-  if (vpnState[id]){
-    const v = vpnState[id];
-
-    if (v.step==="gmail"){ v.gmail=ctx.message.text; v.step="pass"; return ctx.reply("Send Password"); }
-    if (v.step==="pass"){ v.pass=ctx.message.text; v.step="key"; return ctx.reply("Send Key"); }
-
-    if (v.step==="key"){
-      if (!db.vpndata[v.vpn]) db.vpndata[v.vpn]={};
-      db.vpndata[v.vpn][v.day] = {
-        gmail:v.gmail,
-        pass:v.pass,
-        key:ctx.message.text
-      };
-
-      saveDB(db);
-      delete vpnState[id];
-
-      return ctx.reply("✅ VPN Saved Successfully");
-    }
-  }
-
-  /* DEPOSIT FLOW */
-  if (depositState[id]){
-    const d = depositState[id];
-
-    if (d.step==="amount"){
-      d.amount = Number(ctx.message.text);
-      d.step="proof";
-      return ctx.reply("📤 Send Payment Proof");
-    }
-
-    if (d.step==="proof"){
-      const did = Date.now();
-
-      db.deposits[did] = {
-        userId:id,
-        amount:d.amount,
-        method:d.method,
-        proof:ctx.message.text
-      };
-
-      saveDB(db);
-      delete depositState[id];
-
-      await bot.telegram.sendMessage(
-        config.ADMIN_ID,
-`💰 Deposit Request
-
-User: ${id}
-Amount: ${d.amount}
-Method: ${d.method}`,
-Markup.inlineKeyboard([
-[
-Markup.button.callback("✅ Approve",`dep_appr_${did}`),
-Markup.button.callback("❌ Reject",`dep_rej_${did}`)
-]
-])
-      );
-
-      return ctx.reply("⏳ Request sent to admin");
-    }
-  }
-
-  /* REJECT REASON */
-  if (rejectState[id]){
-    const data = rejectState[id];
-
-    await bot.telegram.sendMessage(
-      data.userId,
-`❌ Rejected
-
-Reason: ${ctx.message.text}`
-    );
-
-    delete rejectState[id];
-    return ctx.reply("Done");
-  }
+  ctx.reply(`💳 ${number}\n\n💰 Amount লিখুন`);
 });
 
 /* ================= ADMIN ================= */
@@ -336,13 +261,13 @@ Markup.inlineKeyboard([
 
 bot.action(/spd_(.+)/,(ctx)=>{
   setPriceState[ctx.from.id].day=ctx.match[1];
-  ctx.reply("Enter Price:");
+  ctx.reply("Price দিন:");
 });
 
 bot.command("setvpn",(ctx)=>{
   if (ctx.from.id !== config.ADMIN_ID) return;
 
-  ctx.reply("Select VPN",
+  ctx.reply("VPN Select",
 Markup.inlineKeyboard([
 [Markup.button.callback("Nord","sv_nord"),Markup.button.callback("Express","sv_express")],
 [Markup.button.callback("HMA","sv_hma"),Markup.button.callback("Sharf","sv_sharf")]
@@ -352,7 +277,7 @@ Markup.inlineKeyboard([
 
 bot.action(/sv_(.+)/,(ctx)=>{
   vpnState[ctx.from.id]={vpn:ctx.match[1]};
-  ctx.reply("Select Day",
+  ctx.reply("Day Select",
 Markup.inlineKeyboard([
 [Markup.button.callback("7","svd_7"),Markup.button.callback("30","svd_30")]
 ])
@@ -362,17 +287,109 @@ Markup.inlineKeyboard([
 bot.action(/svd_(.+)/,(ctx)=>{
   vpnState[ctx.from.id].day=ctx.match[1];
   vpnState[ctx.from.id].step="gmail";
-  ctx.reply("Send Gmail:");
+  ctx.reply("Gmail দিন:");
+});
+
+/* ================= TEXT ================= */
+bot.on("text", async (ctx)=>{
+  const db = loadDB();
+  const id = ctx.from.id;
+
+  /* PRICE */
+  if (setPriceState[id]){
+    const s=setPriceState[id];
+    if (!db.prices[s.vpn]) db.prices[s.vpn]={};
+    db.prices[s.vpn][s.day]=Number(ctx.message.text);
+    saveDB(db);
+    delete setPriceState[id];
+    return ctx.reply("✅ Price Set");
+  }
+
+  /* VPN SET */
+  if (vpnState[id]){
+    const v=vpnState[id];
+
+    if (v.step==="gmail"){ v.gmail=ctx.message.text; v.step="pass"; return ctx.reply("Password দিন"); }
+    if (v.step==="pass"){ v.pass=ctx.message.text; v.step="key"; return ctx.reply("Key দিন"); }
+
+    if (v.step==="key"){
+      if (!db.vpndata[v.vpn]) db.vpndata[v.vpn]={};
+      db.vpndata[v.vpn][v.day]={ gmail:v.gmail, pass:v.pass, key:ctx.message.text };
+      saveDB(db);
+      delete vpnState[id];
+      return ctx.reply("✅ VPN Saved");
+    }
+  }
+
+  /* DEPOSIT */
+  if (depositState[id]){
+    const d=depositState[id];
+
+    if (d.step==="amount"){
+      d.amount=Number(ctx.message.text);
+      d.step="proof";
+      return ctx.reply("📤 Proof দিন");
+    }
+
+    if (d.step==="proof"){
+      const did=Date.now();
+
+      db.deposits[did]={
+        userId:id,
+        amount:d.amount,
+        method:d.method,
+        proof:ctx.message.text,
+        status:"pending"
+      };
+
+      saveDB(db);
+      delete depositState[id];
+
+      await ctx.reply("✅ Admin এর কাছে গেছে");
+
+      await bot.telegram.sendMessage(
+        config.ADMIN_ID,
+`💰 Deposit
+
+User: ${id}
+Amount: ${d.amount}`,
+Markup.inlineKeyboard([
+[
+Markup.button.callback("✅ Approve",`dep_appr_${did}`),
+Markup.button.callback("❌ Reject",`dep_rej_${did}`)
+]
+])
+      );
+    }
+  }
+
+  /* REJECT REASON */
+  if (rejectState[id]){
+    const data = rejectState[id];
+
+    await bot.telegram.sendMessage(
+      data.userId,
+`❌ Rejected
+
+Reason: ${ctx.message.text}`
+    );
+
+    delete rejectState[id];
+    return ctx.reply("Done");
+  }
 });
 
 /* ================= APPROVE ================= */
-bot.action(/dep_appr_(.+)/,(ctx)=>{
+bot.action(/dep_appr_(.+)/, async (ctx)=>{
+  if (ctx.from.id !== config.ADMIN_ID) return;
+
   const db=loadDB();
   const dep=db.deposits[ctx.match[1]];
+
   if (!dep) return;
 
   if (!db.users[dep.userId]) db.users[dep.userId]={balance:0};
-  db.users[dep.userId].balance += dep.amount;
+  db.users[dep.userId].balance+=dep.amount;
 
   saveDB(db);
 
@@ -381,12 +398,14 @@ bot.action(/dep_appr_(.+)/,(ctx)=>{
 
 /* ================= REJECT ================= */
 bot.action(/dep_rej_(.+)/,(ctx)=>{
+  if (ctx.from.id !== config.ADMIN_ID) return;
+
   const db=loadDB();
   const dep=db.deposits[ctx.match[1]];
-  if (!dep) return;
 
   rejectState[ctx.from.id]={userId:dep.userId};
-  ctx.reply("Write reject reason:");
+
+  ctx.reply("Reason লিখুন:");
 });
 
 /* ================= JOIN BTN ================= */
