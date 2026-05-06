@@ -5,345 +5,319 @@ const config = require("./config");
 const bot = new Telegraf(config.BOT_TOKEN);
 const DB_FILE = "./db.json";
 
-/* ========= DB ========= */
+/* ================= DB ================= */
 function loadDB() {
   if (!fs.existsSync(DB_FILE)) {
     fs.writeFileSync(DB_FILE, JSON.stringify({
       users: {},
       prices: {},
-      vpns: {},
-      orders: {}
+      vpndata: {}
     }, null, 2));
   }
   return JSON.parse(fs.readFileSync(DB_FILE));
 }
-function saveDB(d) {
-  fs.writeFileSync(DB_FILE, JSON.stringify(d, null, 2));
+function saveDB(data) {
+  fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
 }
 
-/* ========= DATA ========= */
-const VPN = {
-  nord: "Nord VPN",
-  express: "Express VPN",
-  hma: "HMA VPN",
-  sharf: "Sharfshak VPN"
-};
-
-/* ========= STATE ========= */
-const userState = {};
-const adminSetPrice = {};
-const adminSetVpn = {};
-
-/* ========= JOIN ========= */
-async function checkJoin(ctx) {
+/* ================= JOIN CHECK ================= */
+async function isJoined(ctx) {
   try {
     const res = await bot.telegram.getChatMember("@Global_Method_Channel", ctx.from.id);
-    return ["member","administrator","creator"].includes(res.status);
-  } catch { return false; }
-}
-function joinMsg(ctx){
-  return ctx.reply("❌ Join first", Markup.inlineKeyboard([
-    [Markup.button.url("Join", "https://t.me/Global_Method_Channel")],
-    [Markup.button.callback("Joined", "check")]
-  ]));
+    return ["member", "administrator", "creator"].includes(res.status);
+  } catch {
+    return false;
+  }
 }
 
-/* ========= START ========= */
-bot.start(async ctx=>{
-  if(!(await checkJoin(ctx))) return joinMsg(ctx);
-  return showVPN(ctx);
+/* ================= FORCE JOIN ================= */
+async function forceJoin(ctx) {
+  const ok = await isJoined(ctx);
+  if (!ok) {
+    return ctx.reply(
+`🚫 Access Denied!
+
+📢 Bot ব্যবহার করতে হলে আগে আমাদের চ্যানেলে জয়েন করতে হবে।
+
+👉 Join করে আবার "✅ Joined" বাটনে ক্লিক করুন।`,
+      Markup.inlineKeyboard([
+        [Markup.button.url("📢 Join Channel", "https://t.me/Global_Method_Channel")],
+        [Markup.button.callback("✅ Joined", "check_join")]
+      ])
+    );
+  }
+  return true;
+}
+
+/* ================= VPN LIST ================= */
+const vpns = ["nord","express","hma","sharf"];
+
+/* ================= START ================= */
+bot.start(async (ctx) => {
+  if (!(await forceJoin(ctx))) return;
+  showVPN(ctx);
 });
 
-/* ========= VPN LIST ========= */
+/* ================= SHOW VPN ================= */
 function showVPN(ctx){
-  return ctx.reply("🔐 Please Select your VPN",
-    Markup.inlineKeyboard([
-      [
-        Markup.button.callback("Nord VPN","vpn_nord"),
-        Markup.button.callback("Express VPN","vpn_express")
-      ],
-      [
-        Markup.button.callback("HMA VPN","vpn_hma"),
-        Markup.button.callback("Sharf VPN","vpn_sharf")
-      ]
-    ])
-  );
+  ctx.reply(
+"🌐 Please Select Your VPN:",
+Markup.inlineKeyboard([
+[
+Markup.button.callback("Nord VPN","vpn_nord"),
+Markup.button.callback("Express VPN","vpn_express")
+],
+[
+Markup.button.callback("HMA VPN","vpn_hma"),
+Markup.button.callback("Sharfshak VPN","vpn_sharf")
+]
+])
+);
 }
 
-/* ========= SELECT VPN ========= */
-bot.action(/vpn_(.+)/, async ctx=>{
-  if(!(await checkJoin(ctx))) return joinMsg(ctx);
+/* ================= SELECT VPN ================= */
+const userSelect = {};
 
-  const key = ctx.match[1];
-  userState[ctx.from.id] = { vpn:key };
+bot.action(/vpn_(.+)/, async (ctx)=>{
+  if (!(await forceJoin(ctx))) return;
 
-  ctx.reply("⏳ Select duration",
-    Markup.inlineKeyboard([
-      [
-        Markup.button.callback("7 Day",`day_${key}_7`),
-        Markup.button.callback("30 Day",`day_${key}_30`)
-      ]
-    ])
-  );
-});
-
-/* ========= SELECT DAY ========= */
-bot.action(/day_(.+)_(.+)/, ctx=>{
-  const db = loadDB();
   const vpn = ctx.match[1];
-  const day = ctx.match[2];
+  userSelect[ctx.from.id] = { vpn };
 
-  const price = db.prices?.[vpn]?.[day] || 0;
+  ctx.reply(
+"📅 Select Duration:",
+Markup.inlineKeyboard([
+[
+Markup.button.callback("7 Day","day_7"),
+Markup.button.callback("30 Day","day_30")
+]
+])
+);
+});
 
-  userState[ctx.from.id] = { vpn, day, price };
+/* ================= SELECT DAY ================= */
+bot.action(/day_(.+)/, async (ctx)=>{
+  const db = loadDB();
+  const day = ctx.match[1];
+  const user = userSelect[ctx.from.id];
 
-  ctx.reply(`💰 Price: $${price}\nChoose payment`,
-    Markup.inlineKeyboard([
-      [
-        Markup.button.callback("Main Balance","pay_balance"),
-        Markup.button.callback("Manual","pay_manual")
-      ]
-    ])
+  if (!user) return;
+
+  user.day = day;
+
+  const price = db.prices[user.vpn]?.[day] || "Not Set";
+
+  ctx.reply(
+`💰 Price: ${price}
+
+💳 Choose Payment:
+`,
+Markup.inlineKeyboard([
+[
+Markup.button.callback("💰 Main Balance","pay_balance"),
+Markup.button.callback("💳 Manual","pay_manual")
+]
+])
+);
+});
+
+/* ================= BALANCE ================= */
+bot.command("balance", async (ctx)=>{
+  if (!(await forceJoin(ctx))) return;
+
+  const db = loadDB();
+  const user = db.users[ctx.from.id] || { balance: 0 };
+
+  ctx.reply(
+`📊 Account Info
+
+🆔 ID: ${ctx.from.id}
+💰 Balance: ${user.balance}`
   );
 });
 
-/* ========= BALANCE PAY ========= */
-bot.action("pay_balance", ctx=>{
+/* ================= MAIN BALANCE BUY ================= */
+bot.action("pay_balance", async (ctx)=>{
   const db = loadDB();
-  const u = db.users[ctx.from.id] || { balance:0 };
-  const s = userState[ctx.from.id];
+  const id = ctx.from.id;
+  const user = userSelect[id];
 
-  if(u.balance < s.price){
+  if (!user) return;
+
+  const price = db.prices[user.vpn]?.[user.day];
+  if (!price) return ctx.reply("❌ Price not set");
+
+  if (!db.users[id]) db.users[id] = { balance: 0 };
+
+  if (db.users[id].balance < price){
     return ctx.reply("❌ Not enough balance");
   }
 
-  u.balance -= s.price;
-  db.users[ctx.from.id] = u;
-
-  const id = Date.now();
-  db.orders[id] = { user:ctx.from.id, ...s };
-
+  db.users[id].balance -= price;
   saveDB(db);
 
-  bot.telegram.sendMessage(config.ADMIN_ID,
-`🛒 Order
+  const data = db.vpndata[user.vpn]?.[user.day];
 
-User: ${ctx.from.id}
-VPN: ${VPN[s.vpn]}
-Day: ${s.day}`,
-    Markup.inlineKeyboard([
-      [Markup.button.callback("Approve",`ok_${id}`)]
-    ])
-  );
-
-  ctx.reply("✅ Order sent to admin");
-});
-
-/* ========= MANUAL ========= */
-bot.action("pay_manual", ctx=>{
-  ctx.reply("💳 Select method",
-    Markup.inlineKeyboard([
-      [
-        Markup.button.callback("BKash","m_bkash"),
-        Markup.button.callback("Nagad","m_nagad")
-      ],
-      [
-        Markup.button.callback("Binance","m_binance"),
-        Markup.button.url("Support","https://t.me/Smart_Method_Owner")
-      ]
-    ])
-  );
-});
-
-/* ========= METHOD ========= */
-bot.action(/m_(.+)/, ctx=>{
-  const method = ctx.match[1];
-  const s = userState[ctx.from.id];
-
-  let num = "";
-  if(method==="bkash") num="01890XXXXXX";
-  if(method==="nagad") num="01911XXXXXX";
-  if(method==="binance") num="ID:985568941";
-
-  userState[ctx.from.id].method = method;
-  userState[ctx.from.id].step = "proof";
-
-  ctx.reply(
-`💳 ${method.toUpperCase()}
-Send $${s.price} to:
-${num}
-
-Send proof after payment`
-  );
-});
-
-/* ========= PROOF ========= */
-bot.on("text", ctx=>{
-  const db = loadDB();
-  const s = userState[ctx.from.id];
-
-  if(!s || s.step!=="proof") return;
-
-  const id = Date.now();
-
-  db.orders[id] = {
-    user: ctx.from.id,
-    ...s,
-    proof: ctx.message.text
-  };
-
-  saveDB(db);
-
-  bot.telegram.sendMessage(config.ADMIN_ID,
-`🛒 Manual Order
-
-User:${ctx.from.id}
-VPN:${VPN[s.vpn]}
-Day:${s.day}
-Proof:${ctx.message.text}`,
-    Markup.inlineKeyboard([
-      [Markup.button.callback("Approve",`ok_${id}`)]
-    ])
-  );
-
-  delete userState[ctx.from.id];
-
-  ctx.reply("✅ Order sent, wait admin");
-});
-
-/* ========= APPROVE ========= */
-bot.action(/ok_(.+)/, ctx=>{
-  if(ctx.from.id!=config.ADMIN_ID) return;
-
-  const id = ctx.match[1];
-  const db = loadDB();
-  const order = db.orders[id];
-
-  const data = db.vpns?.[order.vpn]?.[order.day];
-
-  bot.telegram.sendMessage(order.user,
+  if (data){
+    return ctx.reply(
 `🎉 Order Delivered
 
-VPN: ${VPN[order.vpn]}
-📧 Gmail: ${data?.gmail}
-🔑 Pass: ${data?.pass}
-🔐 Key: ${data?.key}`
+VPN: ${user.vpn}
+📧 Gmail: ${data.gmail}
+🔑 Pass: ${data.pass}
+🔐 Key: ${data.key}`
+    );
+  }
+
+  /* send admin */
+  bot.telegram.sendMessage(
+    config.ADMIN_ID,
+`🛒 Order
+
+User: ${id}
+VPN: ${user.vpn}
+Day: ${user.day}`,
+Markup.inlineKeyboard([
+[Markup.button.callback("✅ Approve",`appr_${id}`)]
+])
   );
 
-  ctx.editMessageText("Done");
+  ctx.reply("⏳ Sent to admin");
 });
 
-/* ========= SET PRICE ========= */
-bot.command("setprice", ctx=>{
-  if(ctx.from.id!=config.ADMIN_ID) return;
+/* ================= MANUAL ================= */
+bot.action("pay_manual", (ctx)=>{
+  ctx.reply(
+"💳 Select Method:",
+Markup.inlineKeyboard([
+[
+Markup.button.callback("BKash","m_bkash"),
+Markup.button.callback("Nagad","m_nagad")
+],
+[
+Markup.button.callback("Binance","m_binance")
+]
+])
+);
+});
+
+/* ================= ADMIN SET PRICE ================= */
+bot.command("setprice", (ctx)=>{
+  if (ctx.from.id !== config.ADMIN_ID) return;
 
   ctx.reply("Select VPN",
-    Markup.inlineKeyboard([
-      [Markup.button.callback("Nord","sp_nord"),Markup.button.callback("Express","sp_express")],
-      [Markup.button.callback("HMA","sp_hma"),Markup.button.callback("Sharf","sp_sharf")]
-    ])
-  );
+Markup.inlineKeyboard([
+[Markup.button.callback("Nord","sp_nord"),
+Markup.button.callback("Express","sp_express")],
+[Markup.button.callback("HMA","sp_hma"),
+Markup.button.callback("Sharf","sp_sharf")]
+])
+);
 });
 
-bot.action(/sp_(.+)/, ctx=>{
-  adminSetPrice[ctx.from.id] = { vpn: ctx.match[1] };
+const setPriceState = {};
 
-  ctx.reply("Select day",
-    Markup.inlineKeyboard([
-      [Markup.button.callback("7","spd_7"),Markup.button.callback("30","spd_30")]
-    ])
-  );
+bot.action(/sp_(.+)/,(ctx)=>{
+  setPriceState[ctx.from.id]={vpn:ctx.match[1]};
+  ctx.reply("Select Day",
+Markup.inlineKeyboard([
+[Markup.button.callback("7 Day","spd_7"),
+Markup.button.callback("30 Day","spd_30")]
+])
+);
 });
 
-bot.action(/spd_(.+)/, ctx=>{
-  adminSetPrice[ctx.from.id].day = ctx.match[1];
-  adminSetPrice[ctx.from.id].step="price";
-
-  ctx.reply("Enter price:");
+bot.action(/spd_(.+)/,(ctx)=>{
+  setPriceState[ctx.from.id].day=ctx.match[1];
+  ctx.reply("Enter Price:");
 });
 
-bot.on("text", ctx=>{
+bot.on("text",(ctx)=>{
   const db = loadDB();
+  const sp = setPriceState[ctx.from.id];
 
-  /* SET PRICE */
-  if(adminSetPrice[ctx.from.id]?.step==="price"){
-    const s = adminSetPrice[ctx.from.id];
-
-    if(!db.prices[s.vpn]) db.prices[s.vpn]={};
-    db.prices[s.vpn][s.day] = Number(ctx.message.text);
-
+  if (sp){
+    if (!db.prices[sp.vpn]) db.prices[sp.vpn]={};
+    db.prices[sp.vpn][sp.day]=Number(ctx.message.text);
     saveDB(db);
-    delete adminSetPrice[ctx.from.id];
 
+    delete setPriceState[ctx.from.id];
     return ctx.reply("✅ Price Set");
   }
-
-  /* SET VPN */
-  if(adminSetVpn[ctx.from.id]){
-    const s = adminSetVpn[ctx.from.id];
-
-    if(s.step==="gmail"){
-      s.gmail = ctx.message.text;
-      s.step="pass";
-      return ctx.reply("Password:");
-    }
-    if(s.step==="pass"){
-      s.pass = ctx.message.text;
-      s.step="key";
-      return ctx.reply("Login Key:");
-    }
-    if(s.step==="key"){
-      const db = loadDB();
-
-      if(!db.vpns[s.vpn]) db.vpns[s.vpn]={};
-      db.vpns[s.vpn][s.day] = {
-        gmail:s.gmail,
-        pass:s.pass,
-        key:ctx.message.text
-      };
-
-      saveDB(db);
-      delete adminSetVpn[ctx.from.id];
-
-      return ctx.reply("✅ VPN Set Done");
-    }
-  }
 });
 
-/* ========= SET VPN ========= */
-bot.command("setvpn", ctx=>{
-  if(ctx.from.id!=config.ADMIN_ID) return;
+/* ================= ADMIN SET VPN ================= */
+bot.command("setvpn",(ctx)=>{
+  if (ctx.from.id !== config.ADMIN_ID) return;
 
   ctx.reply("Select VPN",
-    Markup.inlineKeyboard([
-      [Markup.button.callback("Nord","sv_nord"),Markup.button.callback("Express","sv_express")],
-      [Markup.button.callback("HMA","sv_hma"),Markup.button.callback("Sharf","sv_sharf")]
-    ])
-  );
+Markup.inlineKeyboard([
+[Markup.button.callback("Nord","sv_nord"),
+Markup.button.callback("Express","sv_express")],
+[Markup.button.callback("HMA","sv_hma"),
+Markup.button.callback("Sharf","sv_sharf")]
+])
+);
 });
 
-bot.action(/sv_(.+)/, ctx=>{
-  adminSetVpn[ctx.from.id] = { vpn:ctx.match[1] };
+const vpnState = {};
 
-  ctx.reply("Select day",
-    Markup.inlineKeyboard([
-      [Markup.button.callback("7","svd_7"),Markup.button.callback("30","svd_30")]
-    ])
-  );
+bot.action(/sv_(.+)/,(ctx)=>{
+  vpnState[ctx.from.id]={vpn:ctx.match[1]};
+  ctx.reply("Select Day",
+Markup.inlineKeyboard([
+[Markup.button.callback("7","svd_7"),
+Markup.button.callback("30","svd_30")]
+])
+);
 });
 
-bot.action(/svd_(.+)/, ctx=>{
-  adminSetVpn[ctx.from.id].day = ctx.match[1];
-  adminSetVpn[ctx.from.id].step="gmail";
-
+bot.action(/svd_(.+)/,(ctx)=>{
+  vpnState[ctx.from.id].day=ctx.match[1];
+  vpnState[ctx.from.id].step="gmail";
   ctx.reply("Send Gmail:");
 });
 
-/* ========= JOIN BTN ========= */
-bot.action("check", async ctx=>{
-  if(!(await checkJoin(ctx))) return joinMsg(ctx);
+bot.on("text",(ctx)=>{
+  const db = loadDB();
+  const vs = vpnState[ctx.from.id];
+
+  if (!vs) return;
+
+  if (vs.step==="gmail"){
+    vs.gmail=ctx.message.text;
+    vs.step="pass";
+    return ctx.reply("Send Password:");
+  }
+
+  if (vs.step==="pass"){
+    vs.pass=ctx.message.text;
+    vs.step="key";
+    return ctx.reply("Send Key:");
+  }
+
+  if (vs.step==="key"){
+    vs.key=ctx.message.text;
+
+    if (!db.vpndata[vs.vpn]) db.vpndata[vs.vpn]={};
+    db.vpndata[vs.vpn][vs.day]={
+      gmail:vs.gmail,
+      pass:vs.pass,
+      key:vs.key
+    };
+
+    saveDB(db);
+    delete vpnState[ctx.from.id];
+
+    return ctx.reply("✅ VPN Set Done");
+  }
+});
+
+/* ================= JOIN BUTTON ================= */
+bot.action("check_join", async (ctx)=>{
+  if (!(await isJoined(ctx))) return forceJoin(ctx);
   showVPN(ctx);
 });
 
 bot.launch();
-console.log("🔥 VPN BOT READY");
+console.log("🚀 Bot Running");
